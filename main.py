@@ -3,6 +3,8 @@ from aiogram import Bot, Dispatcher, executor, types
 import keyboards
 import random
 import logging
+from db import UserApi
+import utils
 from utils import *
 from aiogram.dispatcher import FSMContext
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -11,7 +13,6 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
-stats = dict()
 
 
 def is_that_quiz(function_for_decorate):
@@ -19,11 +20,10 @@ def is_that_quiz(function_for_decorate):
         user_id = callback_query.from_user.id
         data = callback_query.data.split('_')
         message_id = data[1]
-        if user_id not in stats:
+        user = UserApi(user_id)
+        if not user.user_model.now_quiz_name:
             await function_for_decorate(callback_query)
-        elif not stats[user_id]['test']:
-            await function_for_decorate(callback_query)
-        elif stats[user_id]['message_id'] == message_id:
+        elif user.user_model.now_quiz_message_id == message_id:
             await function_for_decorate(callback_query)
         else:
             await bot.edit_message_text(chat_id=user_id,
@@ -34,16 +34,16 @@ def is_that_quiz(function_for_decorate):
 
 @dp.message_handler(state=RegistrationState.name)
 async def save_name(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    stats[user_id]['name'] = message.text
+    user = UserApi(message.from_user.id)
+    user.set_name(message.text)
     await RegistrationState.next()
     await message.answer('Пришлите вашу Фамилию:')
 
 
 @dp.message_handler(state=RegistrationState.surname)
 async def save_surname(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    stats[user_id]['surname'] = message.text
+    user = UserApi(message.from_user.id)
+    user.set_surname(message.text)
     await state.finish()
     await start_message(message, state)
 
@@ -62,13 +62,10 @@ async def callback_replace(markup, callback_query, text):
 @dp.callback_query_handler(startswith('sertificate'))
 async def send_sertificate(callback_query: types.CallbackQuery):
     message_id = callback_query.data.split('_')[1]
-    user_id = callback_query.from_user.id
+    user = UserApi(callback_query.from_user.id)
     markup = keyboards.get_back_menu_keyboard(message_id)
-    if len(stats[user_id]['passed_tests']) == len(config.tests):
-        await callback_replace(markup, callback_query, 'У вас есть сертификат!')
-    else:
-        await callback_replace(markup, callback_query, 'Вы не прошли все тесты!')
-
+    message = utils.generate_sertificate(user)
+    await callback_replace(markup, callback_query, message)
 
 
 @dp.callback_query_handler(startswith('lections'))
@@ -89,20 +86,20 @@ async def send_menu(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(startswith('quizes'))
 async def send_quizes(callback_query: types.CallbackQuery):
     message_id = callback_query.data.split('_')[1]
-    user_id = callback_query.from_user.id
-    markup = keyboards.get_quizes(message_id, stats[user_id]['passed_tests'])
+    user = UserApi(callback_query.from_user.id)
+    markup = keyboards.get_quizes(message_id, user.get_passed_quizes())
     text = config.data['quizes']
     await callback_replace(markup, callback_query, text)
 
 
 @dp.callback_query_handler(startswith('infoTest'))
 async def send_test(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
+    user = UserApi(callback_query.from_user.id)
     message_id = callback_query.data.split('_')[1]
-    test_name = callback_query.data.split('_')[2]
-    markup = keyboards.ready_or_not(message_id, test_name)
-    text = config.tests[test_name]['info']
-    if test_name in stats[user_id]['passed_tests']:
+    quiz_name = callback_query.data.split('_')[2]
+    markup = keyboards.ready_or_not(message_id, quiz_name)
+    text = config.tests[quiz_name]['info']
+    if quiz_name in user.get_passed_quizes():
         text += ' ✅'
     await callback_replace(markup, callback_query, text)
 
@@ -111,15 +108,14 @@ async def send_test(callback_query: types.CallbackQuery):
 @is_that_quiz
 async def start_test(callback_query: types.CallbackQuery):
     message_id = callback_query.data.split('_')[1]
-    test_name = callback_query.data.split('_')[2]
-    questions = config.tests[test_name]['questions']
-    user_id = callback_query.from_user.id
-    stats[user_id]['test'] = test_name
-    stats[user_id]['message_id'] = message_id
+    quiz_name = callback_query.data.split('_')[2]
+    questions = config.tests[quiz_name]['questions']
+    user = UserApi(callback_query.from_user.id)
+    user.set_quiz_now(quiz_name, message_id)
     index = random.randint(0, len(questions) - 1)
     question = questions[index]
     markup = keyboards.get_question_keyboard(
-        message_id, test_name,
+        message_id, quiz_name,
         question, passed_questions=str(index))
     await callback_replace(markup, callback_query, question[0])
 
@@ -127,12 +123,14 @@ async def start_test(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(startswith('answer'))
 @is_that_quiz
 async def check_answer(callback_query: types.CallbackQuery):
+    user = UserApi(callback_query.from_user.id)
     data = callback_query.data.split('_')
-    test_name = data[2]
+    quiz_name = data[2]
     answer_type = data[3]
-    update_user_stat(callback_query.from_user.id, answer_type, test_name)
+    if answer_type == 'True':
+        user.increment_quiz_points()
     passed_questions = set(map(int, data[4].split(',')))
-    questions = config.tests[test_name]['questions']
+    questions = config.tests[quiz_name]['questions']
     all_indexes = set(range(len(questions)))
     not_passed_questions = all_indexes - passed_questions
     if not not_passed_questions:
@@ -143,26 +141,18 @@ async def check_answer(callback_query: types.CallbackQuery):
         await send_question(callback_query, question, question_id)
 
 
-def update_user_stat(user_id, answer_type, test_name):
-    if test_name not in stats[user_id]:
-        stats[user_id][test_name] = 0
-    if answer_type == 'True':
-        stats[user_id][test_name] += 1
-
-
 async def send_stat(callback_query: types.CallbackQuery):
-    data = callback_query.data.split('_')
-    message_id = data[1]
-    test_name = data[2]
-    user_id = callback_query.from_user.id
-    count = stats[user_id][test_name]
-    need_balls = len(config.tests[test_name]['questions'])
-    if need_balls == count:
-        stats[user_id]['passed_tests'].append(test_name)
-    stats[user_id]['test'] = None
-    markup = keyboards.get_menu_keyboard(message_id)
-    await callback_replace(markup, callback_query, f'Вы прошли {test_name}! '
-                           f'У вас {count}/{need_balls} баллов')
+    user = UserApi(callback_query.from_user.id)
+    user_points = user.user_model.now_quiz_points
+    quiz_name = user.user_model.now_quiz_name
+    markup = keyboards.get_menu_keyboard(user.user_model.now_quiz_message_id)
+    max_points = len(config.tests[quiz_name]['questions'])
+    user.set_quiz_passed(max_points)
+    await callback_replace(markup, callback_query,
+                           config.data['quiz_result'].format(
+                               max_points=max_points,
+                               quiz_name=quiz_name,
+                               points=user_points))
 
 
 async def send_question(callback_query: types.CallbackQuery, question, question_id):
@@ -175,12 +165,11 @@ async def send_question(callback_query: types.CallbackQuery, question, question_
 
 @dp.message_handler()
 async def start_message(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id not in stats:  # TODO
-        stats[user_id] = {'name': None, 'surname': None,
-            'test': None, 'passed_tests': []}
+    user = UserApi(message.from_user.id)
+    if user.first_create:
         await state.set_state(RegistrationState.name)
         await message.answer('Пришлите ваше имя')
+        user.first_create = False
         return
     result = await message.answer(text=config.data['menu'])
     markup = keyboards.get_menu_keyboard(result.message_id)
