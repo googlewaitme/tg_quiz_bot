@@ -14,12 +14,15 @@ def get_menu_keyboard(message_id):
     return markup
 
 
-def get_quizes(message_id, passed_tests):
+def get_quizes(message_id, passed_quizes):
     markup = InlineKeyboardMarkup()
     for test in config.tests:
         name = test
-        if test in passed_tests:
-            name += ' ✅'
+        color = config.colors['GRAY']
+        for el in passed_quizes:
+            if name == el.name:
+                color = config.colors[el.status]
+        name += ' ' + color
         markup.add(InlineKeyboardButton(
             name, callback_data=f'infoTest_{message_id}_{test}'))
     markup.add(
@@ -40,9 +43,9 @@ def ready_or_not(message_id, test_name):
     markup = InlineKeyboardMarkup()
     call = f'startTest_{message_id}_{test_name}'
     markup.add(
-        InlineKeyboardButton('Начать', callback_data=call))
+        InlineKeyboardButton('Пройти тест', callback_data=call))
     markup.add(
-        InlineKeyboardButton('Назад', callback_data=f'quizes_{message_id}'))
+        InlineKeyboardButton('Вернуться', callback_data=f'quizes_{message_id}'))
     return markup
 
 
