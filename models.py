@@ -23,22 +23,18 @@ class BaseModel(Model):
 
 class User(BaseModel):
     user_id = CharField()
+    name = CharField(default='')
+    surname = CharField(default='')
+    now_quiz_name = CharField(default='')
+    now_quiz_message_id = CharField(default='')
+    now_quiz_points = IntegerField(default=0)
+
+
+class PassedQuiz(BaseModel):
     name = CharField()
-    surname = CharField()
-    first_mark = IntegerField(default=0)
-    second_mark = IntegerField(default=0)
-    third_mark = IntegerField(default=0)
+    user = ForeignKeyField(User, backref='passed_quizes')
+    max_user_point = IntegerField(default=0)
+    status = CharField(default='RED')
 
 
-class Quiz(BaseModel):
-    name = CharField()
-
-
-class Question(BaseModel):
-    right_answer = CharField()
-    bad_answers = CharField()  # Делятся через ;;;
-    test = ForeignKeyField(Quiz, backref='questions')
-
-
-if __name__ == '__main__':
-    models = [User, Quiz, Question]
+models = [User, PassedQuiz]
